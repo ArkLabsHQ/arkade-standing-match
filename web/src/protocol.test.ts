@@ -3,9 +3,12 @@ import { asset } from "@arkade-os/sdk";
 import {
   atomicToUnits,
   canonicalAssetId,
+  AMOUNT_PRESETS,
   decodeOffer,
   encodeOffer,
+  formatSats,
   groupIndex,
+  holdingsFromCoins,
   internalTxid,
   paymentRequest,
   planFulfill,
@@ -24,15 +27,30 @@ assert.equal(groupIndex(assetId), 7n);
 assert.deepEqual(internalTxid(assetId), Uint8Array.from(asset.AssetId.fromString(assetId).txid).reverse());
 assert.equal(atomicToUnits(150_000_000n, 8), "1.5");
 assert.equal(atomicToUnits(1000n, 0), "1000");
+assert.equal(formatSats(1_000_000n), "1,000,000");
+assert.deepEqual(AMOUNT_PRESETS, [10_000n, 100_000n, 1_000_000n]);
 assert.equal(
-  paymentRequest("tark1qqexample", assetId, 1000n, 0),
-  `bitcoin:?ark=tark1qqexample&assetid=${assetId}&amount=1000`,
+  paymentRequest("tark1qqexample", assetId, 1000n),
+  `bitcoin:?ark=tark1qqexample&assetid=${assetId}&amount=0.00001`,
 );
+assert.equal(
+  paymentRequest("tark1qqexample", assetId, 100_000_000n),
+  `bitcoin:?ark=tark1qqexample&assetid=${assetId}&amount=1`,
+);
+assert.deepEqual(holdingsFromCoins([
+  { assets: [{ assetId, amount: 1000n }, { assetId: asset.AssetId.create("22".repeat(32), 1).toString(), amount: 5n }] },
+  { assets: [{ assetId: assetId.toUpperCase(), amount: 25n }] },
+  { isSpent: true, assets: [{ assetId, amount: 9n }] },
+  { spentBy: "ab".repeat(32), assets: [{ assetId, amount: 8n }] },
+]), [
+  { id: assetId, sats: 1025n },
+  { id: asset.AssetId.create("22".repeat(32), 1).toString(), sats: 5n },
+]);
 
 const connect = new URL(walletConnectUrl("http://localhost:5173/?intent=connect"));
 assert.equal(connect.searchParams.get("action"), "connect");
 assert.equal(connect.searchParams.get("callback"), "http://localhost:5173/?intent=connect");
-const request = paymentRequest("tark1qqexample", assetId, 5n, 0);
+const request = paymentRequest("tark1qqexample", assetId, 5n);
 const send = new URL(walletSendUrl("http://127.0.0.1:5173/?intent=fund&offer=abc", request));
 assert.equal(send.searchParams.get("action"), "send");
 assert.equal(send.searchParams.get("request"), request);

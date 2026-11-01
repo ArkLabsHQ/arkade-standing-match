@@ -15,11 +15,13 @@ import {
 import {
   EMULATOR_URL,
   OPERATOR_URL,
+  BITCOIN_DECIMALS,
   bytesToHex,
   canonicalAssetId,
   errorText,
   groupIndex,
   hexToBytes,
+  holdingsFromCoins,
   internalTxid,
   usableDecimals,
   type OfferRecord,
@@ -93,6 +95,40 @@ export function sameBinding(session: Session, offer: OfferRecord): boolean {
   return server.toLowerCase() === offer.serverKeyHex.toLowerCase() && delay === offer.exitDelay;
 }
 
+export type WalletAsset = {
+  id: string;
+  sats: bigint;
+  ticker?: string;
+  name?: string;
+};
+
+export async function walletAssets(session: Session, identity: WalletIdentity): Promise<WalletAsset[]> {
+  if (!session.client.indexer) throw new Error("This session has no indexer.");
+  const { vtxos } = await session.client.indexer.getVtxos({
+    scripts: [bytesToHex(identity.pkScript)],
+    spendableOnly: true,
+  });
+  const held = holdingsFromCoins(vtxos.map((coin) => ({
+    isSpent: coin.isSpent,
+    spentBy: coin.spentBy,
+    assets: coin.assets,
+  })));
+  return Promise.all(held.map(async (entry) => {
+    try {
+      const details = await assetDetails(entry.id);
+      const ticker = details.metadata?.ticker;
+      const name = details.metadata?.name;
+      return {
+        ...entry,
+        ...(typeof ticker === "string" && ticker ? { ticker } : {}),
+        ...(typeof name === "string" && name ? { name } : {}),
+      };
+    } catch {
+      return entry;
+    }
+  }));
+}
+
 export type WalletIdentity = {
   address: string;
   pubkeyHex: string;
@@ -129,18 +165,21 @@ export function walletIdentity(session: Session, address: string, pubkeyHex: str
 
 let assetReader: ReadonlyAssetManager | undefined;
 
-export async function assetDecimals(assetId: string): Promise<{ id: string; decimals: number; named: boolean }> {
+async function assetDetails(assetId: string) {
   const id = canonicalAssetId(assetId);
   assetReader ??= new ReadonlyAssetManager(new RestIndexerProvider(OPERATOR_URL));
-  let details;
   try {
-    details = await assetReader.getAssetDetails(id);
+    return await assetReader.getAssetDetails(id);
   } catch (error) {
     throw new Error(`The indexer did not return asset ${id}. ${errorText(error)}`);
   }
+}
+
+export async function bitcoinPrecisionAsset(assetId: string): Promise<string> {
+  const details = await assetDetails(assetId);
   const decimals = usableDecimals(details.metadata?.decimals);
-  if (decimals === undefined) {
-    throw new Error(`The indexer returned decimals for ${id} that this page will not convert.`);
+  if (details.metadata?.decimals === undefined || decimals !== BITCOIN_DECIMALS) {
+    throw new Error(`The indexer did not report bitcoin precision for ${details.assetId}. Amounts on this page are satoshis.`);
   }
-  return { id, decimals, named: details.metadata?.decimals !== undefined };
+  return canonicalAssetId(details.assetId);
 }

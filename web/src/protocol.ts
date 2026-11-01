@@ -5,6 +5,9 @@ export const EMULATOR_URL = "https://emulator.mutinynet.arkade.sh";
 export const EXPLORER_URL = "https://explorer.mutinynet.arkade.sh/";
 export const WALLET_ORIGIN = "https://arkade.money/";
 export const CARRIER_SATS = 330;
+/** Asset amounts use bitcoin's 8 decimal places. One satoshi is one base unit. */
+export const BITCOIN_DECIMALS = 8;
+export const AMOUNT_PRESETS = [10_000n, 100_000n, 1_000_000n] as const;
 const MAX_CONVERSION_DECIMALS = 18;
 
 export type OfferRecord = {
@@ -86,12 +89,30 @@ export function errorText(error: unknown): string {
 
 export function parsePositiveInteger(value: string, label: string): bigint {
   const trimmed = value.trim();
-  if (!/^[1-9][0-9]*$/.test(trimmed) && trimmed !== "0") {
-    throw new Error(`${label} is a positive integer in asset units.`);
+  if (!/^[1-9][0-9]*$/.test(trimmed)) {
+    throw new Error(`${label} is a positive number of satoshis.`);
   }
-  const amount = BigInt(trimmed);
-  if (amount <= 0n) throw new Error(`${label} is a positive integer in asset units.`);
-  return amount;
+  return BigInt(trimmed);
+}
+
+export function formatSats(amount: bigint): string {
+  const text = amount.toString();
+  return text.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+export function holdingsFromCoins(coins: { isSpent?: boolean; spentBy?: string; assets?: { assetId: string; amount: bigint }[] }[]): { id: string; sats: bigint }[] {
+  const totals = new Map<string, bigint>();
+  for (const coin of coins) {
+    if (coin.isSpent || coin.spentBy) continue;
+    for (const entry of coin.assets ?? []) {
+      const id = canonicalAssetId(entry.assetId);
+      totals.set(id, (totals.get(id) ?? 0n) + entry.amount);
+    }
+  }
+  return [...totals.entries()]
+    .filter(([, sats]) => sats > 0n)
+    .map(([id, sats]) => ({ id, sats }))
+    .sort((left, right) => (left.sats === right.sats ? left.id.localeCompare(right.id) : left.sats > right.sats ? -1 : 1));
 }
 
 export function canonicalAssetId(value: string): string {
@@ -127,9 +148,9 @@ export function usableDecimals(value: unknown): number | undefined {
   return undefined;
 }
 
-export function paymentRequest(address: string, assetId: string, atomicAmount: bigint, decimals: number): string {
-  if (atomicAmount <= 0n) throw new Error("The offer amount has to be a positive integer.");
-  return `bitcoin:?ark=${address}&assetid=${assetId}&amount=${atomicToUnits(atomicAmount, decimals)}`;
+export function paymentRequest(address: string, assetId: string, sats: bigint): string {
+  if (sats <= 0n) throw new Error("The offer amount has to be a positive number of satoshis.");
+  return `bitcoin:?ark=${address}&assetid=${assetId}&amount=${atomicToUnits(sats, BITCOIN_DECIMALS)}`;
 }
 
 export function walletConnectUrl(callback: string): string {

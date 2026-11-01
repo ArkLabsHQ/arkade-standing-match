@@ -148,7 +148,7 @@ label {
   margin-top: 0.75rem;
 }
 
-input[type="text"], input[type="url"] {
+input[type="text"], input[type="url"], input[type="number"], select {
   width: 100%;
   border: 1px solid var(--line);
   background: #fff;
@@ -160,10 +160,26 @@ input[type="text"], input[type="url"] {
   font-size: 0.86rem;
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 9rem;
-  gap: 0.7rem;
+select:disabled { color: var(--muted); }
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+button.preset {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--line);
+  min-height: 40px;
+  padding: 0.4rem 0.75rem;
+}
+
+button.preset.is-selected {
+  background: var(--green);
+  color: #f6fffa;
+  border-color: var(--green-deep);
 }
 
 .offer {

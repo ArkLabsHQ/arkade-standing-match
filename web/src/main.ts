@@ -1,22 +1,26 @@
 import { bytesToHex, hexToBytes } from "./protocol.ts";
 import { submitCancel, submitFulfill } from "./match.ts";
 import {
-  assetDecimals,
+  bitcoinPrecisionAsset,
   contractFor,
   openSession,
   refreshScript,
   sameBinding,
+  walletAssets,
   walletIdentity,
   type Session,
+  type WalletAsset,
   type WalletIdentity,
 } from "./session.ts";
 import {
+  AMOUNT_PRESETS,
   CARRIER_SATS,
   EXPLORER_URL,
   OPERATOR_URL,
   decodeOffer,
   encodeOffer,
   errorText,
+  formatSats,
   isTxid,
   isXOnlyHex,
   parsePositiveInteger,
@@ -56,6 +60,9 @@ const state: {
   session?: Session;
   sessionError?: string;
   wallet?: WalletView;
+  holdings?: WalletAsset[];
+  holdingsError?: string;
+  holdingsLoading: boolean;
   offers: LiveOffer[];
   selected: Set<string>;
   banner?: { kind: "ok" | "error"; text: string };
@@ -65,6 +72,7 @@ const state: {
 } = {
   offers: [],
   selected: new Set(),
+  holdingsLoading: false,
   busy: false,
 };
 
@@ -92,14 +100,15 @@ const fundBody = app.querySelector("#fund .body") as HTMLElement;
 const offersBody = app.querySelector("#offers .body") as HTMLElement;
 const matchBody = app.querySelector("#match .body") as HTMLElement;
 
-const offerAsset = field("Offer asset");
-const offerAmount = field("Offer amount");
-const wantAsset = field("Want asset");
-const wantAmount = field("Want amount");
+const assetStatus = el("p", { className: "note" });
+const offerAsset = assetSelect("Offer asset");
+const offerAmount = satsField("Offer amount");
+const wantAsset = assetSelect("Want asset");
+const wantAmount = satsField("Want amount");
 const fundButton = button("Fund with the wallet", () => { void fund(); });
-const fundNote = el("p", { className: "note", text: `The wallet sends the offer asset. The carrier on that coin is ${CARRIER_SATS} sats.` });
+const fundNote = el("p", { className: "note", text: `Amounts are satoshis. The wallet sends the offer asset. The carrier on that coin is ${CARRIER_SATS} sats.` });
 const fundStatus = el("div");
-fundBody.append(grid(offerAsset, offerAmount), grid(wantAsset, wantAmount), fundNote, fundButton, fundStatus);
+fundBody.append(assetStatus, offerAsset.label, offerAmount.label, wantAsset.label, wantAmount.label, fundNote, fundButton, fundStatus);
 
 loadStored();
 importHash();
@@ -112,11 +121,14 @@ window.addEventListener("storage", (event) => {
     loadStored();
     adoptWallet();
     render();
+    void loadHoldings();
     void watchAll();
   }
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") void watchAll();
+  if (document.visibilityState !== "visible") return;
+  void loadHoldings();
+  void watchAll();
 });
 
 async function boot() {
@@ -125,7 +137,7 @@ async function boot() {
     state.sessionError = undefined;
     adoptWallet();
     render();
-    await watchAll();
+    await Promise.all([loadHoldings(), watchAll()]);
   } catch (error) {
     state.sessionError = errorText(error);
     render();
@@ -202,7 +214,9 @@ function render() {
   renderOffers();
   renderMatch();
   fundButton.classList.toggle("is-next", nextStep() === "fund");
-  fundButton.disabled = state.busy || !state.session || !state.wallet?.identity;
+  const readyAssets = Boolean(state.holdings?.length) && !state.holdingsLoading && !state.holdingsError;
+  fundButton.disabled = state.busy || !state.session || !state.wallet?.identity || !readyAssets;
+  syncAssets();
 }
 
 function renderSession() {
@@ -276,7 +290,7 @@ function renderOffers() {
     const card = el("article", { className: "offer" });
     card.append(el("h3", { text: offer.record.label }));
     card.append(el("p", { className: "mono", text: offer.record.address }));
-    card.append(line(`${offer.record.offerAmount} of ${shortId(offer.record.offerAssetId)} for at least ${offer.record.wantAmount} of ${shortId(offer.record.wantAssetId)}`));
+    card.append(line(`${formatSats(BigInt(offer.record.offerAmount))} sats of ${assetLabel(offer.record.offerAssetId)} for at least ${formatSats(BigInt(offer.record.wantAmount))} sats of ${assetLabel(offer.record.wantAssetId)}`));
     card.append(line(`Pays ${offer.record.payoutAddress}`));
     if (offer.binding === "different") {
       card.append(note("This offer was bound to a different operator key or exit delay. This session derives a different address.", "error"));
@@ -359,7 +373,7 @@ function renderMatch() {
       for (const problem of plan.problems) matchBody.append(note(problem, "error"));
     } else {
       plan.outputs.forEach((output, index) => {
-        matchBody.append(line(`Output ${index} pays ${output.amount} sats and ${output.assetAmount} of ${shortId(output.assetId)}.`));
+        matchBody.append(line(`Output ${index} pays ${formatSats(output.amount)} sats and ${formatSats(output.assetAmount)} sats of ${assetLabel(output.assetId)}.`));
       });
     }
   } else {
@@ -384,7 +398,7 @@ function coinBlock(offer: LiveOffer, coin: ShownCoin, position: boolean) {
   block.append(el("p", { className: "mono", text: `${coin.txid}:${coin.vout}` }));
   const assetText = coin.assets.length === 0
     ? "no asset"
-    : coin.assets.map((entry) => `${entry.amount} of ${shortId(entry.assetId)}`).join(", ");
+    : coin.assets.map((entry) => `${formatSats(entry.amount)} sats of ${assetLabel(entry.assetId)}`).join(", ");
   block.append(line(`${coin.value} sats, ${assetText}`));
   block.append(line(coin.isSpent ? `Spent${coin.spentBy ? ` by ${coin.spentBy}` : ""}.` : "Open."));
   block.append(line(coin.isUnrolled === undefined
@@ -451,12 +465,17 @@ async function fund() {
   state.busy = true;
   render();
   try {
-    const offeredAsset = await assetDecimals(offerAsset.input.value);
-    const want = await assetDecimals(wantAsset.input.value);
+    if (!offerAsset.select.value || !wantAsset.select.value) {
+      throw new Error("Choose the offer asset and the want asset from this wallet.");
+    }
+    const offerAssetId = await bitcoinPrecisionAsset(offerAsset.select.value);
+    const wantId = await bitcoinPrecisionAsset(wantAsset.select.value);
     const offered = parsePositiveInteger(offerAmount.input.value, "Offer amount");
     const wanted = parsePositiveInteger(wantAmount.input.value, "Want amount");
-    const offerAssetId = offeredAsset.id;
-    const decimals = offeredAsset.decimals;
+    const held = state.holdings?.find((entry) => entry.id === offerAssetId);
+    if (held && offered > held.sats) {
+      throw new Error(`This wallet holds ${formatSats(held.sats)} sats of the offer asset.`);
+    }
     const draft: OfferRecord = {
       id: crypto.randomUUID(),
       label: `Offer ${state.offers.length + 1}`,
@@ -468,7 +487,7 @@ async function fund() {
       userHex: bytesToHex(wallet.user),
       offerAssetId,
       offerAmount: offered.toString(),
-      wantAssetId: want.id,
+      wantAssetId: wantId,
       wantAmount: wanted.toString(),
       serverKeyHex: bytesToHex(session.client.serverKey),
       emulatorKeyHex: session.emulator.pinned,
@@ -479,7 +498,7 @@ async function fund() {
     draft.pkScriptHex = bytesToHex(contract.pkScript);
     await contract.register({ label: draft.label });
     upsert(draft);
-    const request = paymentRequest(contract.address, offerAssetId, offered, decimals);
+    const request = paymentRequest(contract.address, offerAssetId, offered);
     const callback = callbackUrl({ intent: "fund", offer: draft.id });
     const url = walletSendUrl(callback, request);
     state.pendingUrl = url;
@@ -682,24 +701,123 @@ function shortId(id: string): string {
   return id.length < 16 ? id : `${id.slice(0, 6)}…${id.slice(-4)}`;
 }
 
+let holdingsTicket = 0;
+
+async function loadHoldings() {
+  const ticket = ++holdingsTicket;
+  const session = state.session;
+  const identity = state.wallet?.identity;
+  if (!session || !identity) {
+    state.holdings = undefined;
+    state.holdingsError = undefined;
+    state.holdingsLoading = false;
+    syncAssets();
+    return;
+  }
+  state.holdingsLoading = true;
+  state.holdingsError = undefined;
+  render();
+  try {
+    const assets = await walletAssets(session, identity);
+    if (ticket !== holdingsTicket) return;
+    state.holdings = assets;
+    state.holdingsError = undefined;
+  } catch (error) {
+    if (ticket !== holdingsTicket) return;
+    state.holdings = undefined;
+    state.holdingsError = errorText(error);
+  } finally {
+    if (ticket === holdingsTicket) {
+      state.holdingsLoading = false;
+      render();
+    }
+  }
+}
+
+function syncAssets() {
+  const assets = state.holdings ?? [];
+  fillSelect(offerAsset.select, assets);
+  fillSelect(wantAsset.select, assets);
+  const locked = !state.wallet?.identity || state.holdingsLoading || assets.length === 0;
+  offerAsset.select.disabled = locked;
+  wantAsset.select.disabled = locked;
+  assetStatus.className = state.holdingsError ? "error" : "note";
+  if (!state.wallet?.identity) assetStatus.textContent = "Connect a wallet to choose an asset it holds.";
+  else if (state.holdingsLoading) assetStatus.textContent = "Loading assets in this wallet.";
+  else if (state.holdingsError) assetStatus.textContent = state.holdingsError;
+  else if (assets.length === 0) assetStatus.textContent = "This wallet has no asset coins on MutinyNet.";
+  else assetStatus.textContent = "Offer and want are assets in this wallet, in satoshis.";
+}
+
+function fillSelect(select: HTMLSelectElement, assets: WalletAsset[]) {
+  const previous = select.value;
+  select.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = assets.length ? "Choose an asset" : "No assets in this wallet";
+  select.append(placeholder);
+  for (const asset of assets) {
+    const option = document.createElement("option");
+    option.value = asset.id;
+    const title = asset.ticker || asset.name || shortId(asset.id);
+    option.textContent = `${title} · ${formatSats(asset.sats)} sats`;
+    select.append(option);
+  }
+  if (assets.some((asset) => asset.id === previous)) select.value = previous;
+  else if (assets.length === 1) select.value = assets[0].id;
+}
+
+function assetLabel(id: string): string {
+  const held = state.holdings?.find((asset) => asset.id === id);
+  return held?.ticker || held?.name || shortId(id);
+}
+
 function section(id: string, title: string): HTMLElement {
   const body = el("div", { className: "body" });
   const block = el("section", { id }, el("h2", { text: title }), body);
   return block;
 }
 
-function field(name: string): { label: HTMLLabelElement; input: HTMLInputElement } {
-  const input = document.createElement("input");
-  input.type = "text";
-  input.autocomplete = "off";
-  input.spellcheck = false;
+function assetSelect(name: string): { label: HTMLLabelElement; select: HTMLSelectElement } {
+  const select = document.createElement("select");
   const label = document.createElement("label");
-  label.append(document.createTextNode(name), input);
+  label.append(document.createTextNode(name), select);
+  return { label, select };
+}
+
+function satsField(name: string): { label: HTMLLabelElement; input: HTMLInputElement } {
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "1";
+  input.step = "1";
+  input.inputMode = "numeric";
+  input.autocomplete = "off";
+  const presets = document.createElement("div");
+  presets.className = "presets";
+  presets.setAttribute("role", "group");
+  presets.setAttribute("aria-label", `${name} presets`);
+  for (const preset of AMOUNT_PRESETS) {
+    const choice = document.createElement("button");
+    choice.type = "button";
+    choice.className = "preset";
+    choice.dataset.sats = preset.toString();
+    choice.textContent = `${formatSats(preset)} sats`;
+    choice.addEventListener("click", () => {
+      input.value = preset.toString();
+      markPresets(presets, input.value);
+    });
+    presets.append(choice);
+  }
+  input.addEventListener("input", () => markPresets(presets, input.value));
+  const label = document.createElement("label");
+  label.append(document.createTextNode(`${name} (sats)`), input, presets);
   return { label, input };
 }
 
-function grid(left: { label: HTMLLabelElement }, right: { label: HTMLLabelElement }): HTMLElement {
-  return el("div", { className: "grid" }, left.label, right.label);
+function markPresets(group: HTMLElement, value: string) {
+  for (const choice of group.querySelectorAll("button")) {
+    choice.classList.toggle("is-selected", choice.dataset.sats === value);
+  }
 }
 
 function button(text: string, onClick: () => void, className = ""): HTMLButtonElement {
