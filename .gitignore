@@ -1,0 +1,4 @@
+compiler/
+regtest/
+node_modules/
+.env.regtest

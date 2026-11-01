@@ -1,0 +1,132 @@
+{
+  "formatVersion": 1,
+  "contractName": "SwapWantBtc",
+  "constructorInputs": [
+    {
+      "name": "makerWP",
+      "type": "pubkey"
+    },
+    {
+      "name": "wantAmount",
+      "type": "int"
+    },
+    {
+      "name": "user",
+      "type": "pubkey"
+    },
+    {
+      "name": "payoutIndex",
+      "type": "int"
+    }
+  ],
+  "functions": [
+    {
+      "name": "fulfill",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<payoutIndex>",
+          "OP_DUP",
+          "OP_INSPECTOUTPUTVALUE",
+          "<wantAmount>",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<makerWP>",
+          "OP_EQUAL"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "fulfill",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:fulfill>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cancel",
+      "leaves": [
+        {
+          "name": "cancel",
+          "witness": [
+            {
+              "name": "userSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<user>",
+            "OP_CHECKSIGVERIFY",
+            "<SERVER_KEY>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exit",
+      "leaves": [
+        {
+          "name": "exit",
+          "witness": [
+            {
+              "name": "userSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ],
+          "asm": [
+            "<SERVER_EXIT_DELAY>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<user>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    }
+  ],
+  "source": {
+    "entry": "swap_want_btc.ark",
+    "files": {
+      "swap_want_btc.ark": "pragma arkade ^0.1.0;\n\ncontract SwapWantBtc(\n  // 32-byte taproot program of the maker's script. fulfill pays it on outputs[payoutIndex].\n  pubkey makerWP,\n  // Sats. outputs[payoutIndex] must carry at least this much.\n  int    wantAmount,\n  // 32-byte x-only key of the trader who funds the swap.\n  pubkey user,\n  // Index of the output that pays the maker. Two offers in one transaction use different indexes.\n  int    payoutIndex\n) {\n  function fulfill() {\n    require(tx.outputs[payoutIndex].value >= wantAmount);\n    let recipient = tx.outputs[payoutIndex].script;\n    require(recipient.version == 1);\n    require(recipient.program == makerWP);\n  }\n\n  function cancel(signature userSig, signature serverSig) tapscript {\n    require(checkMultisig([user, server], [userSig, serverSig], 2));\n  }\n\n  function exit(signature userSig) tapscript {\n    require(older(serverExitDelay));\n    require(checkSig(userSig, user));\n  }\n}\n"
+    }
+  },
+  "compiler": {
+    "name": "arkadec",
+    "version": "0.1.0-rc.1",
+    "options": {
+      "optimize": true
+    }
+  },
+  "updatedAt": "2026-11-01T12:12:22.473887351+00:00",
+  "fingerprint": "sha256:6c78808c9ce093a790b77e8ee6a6daa92ff72c808635e8c3cce8518ab6539e97"
+}

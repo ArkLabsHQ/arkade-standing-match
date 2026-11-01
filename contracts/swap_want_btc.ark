@@ -1,0 +1,28 @@
+pragma arkade ^0.1.0;
+
+contract SwapWantBtc(
+  // 32-byte taproot program of the maker's script. fulfill pays it on outputs[payoutIndex].
+  pubkey makerWP,
+  // Sats. outputs[payoutIndex] must carry at least this much.
+  int    wantAmount,
+  // 32-byte x-only key of the trader who funds the swap.
+  pubkey user,
+  // Index of the output that pays the maker. Two offers in one transaction use different indexes.
+  int    payoutIndex
+) {
+  function fulfill() {
+    require(tx.outputs[payoutIndex].value >= wantAmount);
+    let recipient = tx.outputs[payoutIndex].script;
+    require(recipient.version == 1);
+    require(recipient.program == makerWP);
+  }
+
+  function cancel(signature userSig, signature serverSig) tapscript {
+    require(checkMultisig([user, server], [userSig, serverSig], 2));
+  }
+
+  function exit(signature userSig) tapscript {
+    require(older(serverExitDelay));
+    require(checkSig(userSig, user));
+  }
+}

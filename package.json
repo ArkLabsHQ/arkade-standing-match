@@ -1,0 +1,16 @@
+{
+  "name": "arkade-standing-match",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types swap.regtest.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@arkade-os/sdk": "~0.5.0",
+    "eventsource": "^5.1.4"
+  }
+}
