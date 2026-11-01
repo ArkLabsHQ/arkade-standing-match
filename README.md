@@ -109,3 +109,12 @@ pnpm test
 ```
 
 Node is pinned to 22.23.4 in `.nvmrc` and `package.json` `engines`. The test script uses `node --experimental-strip-types`.
+
+## MutinyNet page
+
+`web/` connects an Arkade wallet on MutinyNet, funds `MatchedSwap` with an ordinary send, lists the standing offers, and lets a matcher submit the two-input fulfill. Cancel is on a lone offer. GitHub Pages serves the build at <https://arklabshq.github.io/arkade-standing-match/>.
+
+```bash
+pnpm install
+pnpm dev
+```

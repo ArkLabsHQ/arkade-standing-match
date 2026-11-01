@@ -1,4 +1,7 @@
 compiler/
 regtest/
 node_modules/
+dist/
+.agents/
+skills-lock.json
 .env.regtest
