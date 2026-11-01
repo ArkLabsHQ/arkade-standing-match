@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "22.23.4"
+  },
   "scripts": {
     "test": "node --experimental-strip-types swap.regtest.ts"
   },

@@ -1,8 +1,8 @@
 # Standing match
 
-Trader A funds one `MatchedSwap`. Trader B funds another. Each funding is an ordinary send, and the maker does not come back to sign. A matcher spends the two coins as the two inputs of one transaction. `fulfill` has no user signature. The operator and the emulator cosign it, and only when every `require` passes.
+`MatchedSwap` is one contract. Trader A funds it. Trader B funds another instance. Each funding is an ordinary send, and the maker does not come back to sign. A matcher spends the two coins as the two inputs of one transaction. `fulfill` has no user signature. The operator and the emulator cosign it, and only when every `require` passes.
 
-The payout index is the input index. Input 0 is paid on output 0. Input 1 is paid on output 1. The offer asset on this input is exactly `offerAmount`. The want asset on the other input is `received`, and `received` is at least `wantAmount`. Output `payout` pays the maker's version-1 program exactly `received` of that want asset, with at least as many sats as this input. Both asset deltas are 0. There is no third input and no continuation.
+`payout` is `this.activeInputIndex`. The other input is `1 - payout`. This input carries exactly `offerAmount` of one offer asset. The counterparty input carries `received` of the want asset, and `received` is at least `wantAmount`. Output `payout` pays the maker's version-1 program exactly `received` of that asset, with at least as many sats as this input. The offer asset and the want asset both have `delta == 0`. There is no third input and no continuation.
 
 `cancel` is the maker and the operator, with no timelock. `exit` is the maker after `older(serverExitDelay)`. `serverExitDelay` is reserved. The deposit is not a constructor field.
 
@@ -30,11 +30,11 @@ flowchart LR
 
 ## The rejected transaction
 
-Input 1's `fulfill` sets `payout` to that input's index. A transaction that pays both makers on output 0 fails `outputs[payout].program == makerWP` for input 1. It may not balance.
+Input 1 sets `payout` to `this.activeInputIndex`. A transaction that pays both makers on output 0 fails `outputs[payout].program == makerWP` for that input. It may not balance.
 
 ```mermaid
 flowchart LR
-  input1["input 1<br/>payout = 1"] --> tx["rejected<br/>outputs payout program != makerWP"]
+  input1["input 1<br/>payout = activeInputIndex"] --> tx["rejected<br/>outputs payout program != makerWP"]
   tx --> wrong["output 0<br/>the output the script refuses"]
 ```
 
@@ -50,7 +50,7 @@ flowchart LR
 
 A `require` is not authorization. It checks the transaction. It does not identify who may move the coins.
 
-Enforced: two inputs, this input's offer asset is exactly `offerAmount`, the other input's want asset is `received >= wantAmount`, and output `payout` pays `makerWP` exactly `received` with at least this input's sats. Both asset deltas are 0.
+Enforced: `tx.numInputs == 2`, this input's offer asset is exactly `offerAmount`, the counterparty input's want asset is `received >= wantAmount`, and output `payout` pays `makerWP` exactly `received` with at least this input's sats. Both asset deltas are 0.
 
 Not claimed: operator liveness, that `cancel` chooses a destination, or that a wish can be filled in part.
 
@@ -58,11 +58,11 @@ Not claimed: operator liveness, that `cancel` chooses a destination, or that a w
 
 ### One output satisfies both
 
-Claim: each maker is paid on the output at their own input's index.
+Claim: each maker is paid on the output at `this.activeInputIndex`.
 
 Attack: the matcher builds one output and both scripts accept it.
 
-`payout = this.activeInputIndex`, and `outputs[payout]` must be that maker's version-1 program carrying `received`. Input 0 and input 1 therefore name different outputs.
+`payout = this.activeInputIndex`, and `outputs[payout]` must be that maker's version-1 program carrying `received`. The two inputs therefore name different outputs.
 
 Left open: `cancel` still needs the maker and the operator. It has no covenant, so the coins go where that spend says.
 
@@ -85,3 +85,27 @@ Attack: a third input pays the makers, and the deposits are paid to the attacker
 `tx.numInputs == 2`. Each input carries one asset, and both asset deltas are 0, so the offer asset and the want asset move from those two inputs onto the two maker outputs.
 
 Left open: `exit` still needs the maker after `older(serverExitDelay)`. That path spends one unrolled coin. It does not run the cross.
+
+## Version check
+
+`recipient.version == 1` compares integers, so the compiler emits `OP_NUMEQUALVERIFY` after `OP_INSPECTOUTPUTSCRIPTPUBKEY`. The inspect opcode pushes the witness version as a script number. Numeric equality accepts the minimal encoding of 1 and rejects every other version. A non-minimal encoding fails the numeric opcode, so it cannot pass as version 1. `OP_EQUALVERIFY` is the byte compare the compiler uses for the program, which is a byte string.
+
+## Setup
+
+`arkade.programFromArtifact` does not verify the artifact fingerprint. The regtest checks it.
+
+The compiler and the regtest stack are local clones. Both directories stay gitignored.
+
+```bash
+git clone --depth 1 https://github.com/arkade-os/compiler.git compiler
+cargo run --manifest-path compiler/Cargo.toml --release -- contracts/matched_swap.ark -o contracts/matched_swap.artifact.json
+
+git clone --depth 1 https://github.com/ArkLabsHQ/arkade-regtest.git regtest
+printf 'AUTOMINE_INTERVAL=0\n' > .env.regtest
+node regtest/regtest.mjs start --env .env.regtest --profile ark --profile emulator
+
+pnpm install
+pnpm test
+```
+
+Node is pinned to 22.23.4 in `.nvmrc` and `package.json` `engines`. The test script uses `node --experimental-strip-types`.
