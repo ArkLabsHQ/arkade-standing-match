@@ -1,0 +1,55 @@
+pragma arkade ^0.1.0;
+
+contract MatchedSwap(
+  // 32-byte taproot program of the maker's script. fulfill pays it on this input's output.
+  pubkey  makerWP,
+  // 32-byte x-only key of the trader who funds the swap.
+  pubkey  user,
+  // The asset this trader deposits, genesis txid in internal byte order.
+  bytes32 offerAssetTxid,
+  // That asset's group index.
+  int     offerAssetGroupIndex,
+  // Units of the offer asset this input must hold. The whole input is the cross.
+  int     offerAmount,
+  // The asset this trader wants, genesis txid in internal byte order.
+  bytes32 wantAssetTxid,
+  // That asset's group index.
+  int     wantAssetGroupIndex,
+  // Minimum units of the want asset the counterparty input must hold.
+  int     wantAmount
+) {
+  function fulfill() {
+    require(tx.numInputs == 2);
+    require(offerAmount > 0);
+    require(wantAmount > 0);
+    require(tx.assetGroups.find(offerAssetTxid, offerAssetGroupIndex).delta == 0);
+    require(tx.assetGroups.find(wantAssetTxid, wantAssetGroupIndex).delta == 0);
+
+    int payout = this.activeInputIndex;
+    int counterparty = 1 - payout;
+
+    require(tx.inputs[payout].assets.length == 1);
+    require(tx.inputs[payout].assets.lookup(offerAssetTxid, offerAssetGroupIndex) == offerAmount);
+    require(tx.inputs[counterparty].assets.length == 1);
+
+    int received = tx.inputs[counterparty].assets.lookup(wantAssetTxid, wantAssetGroupIndex);
+    require(received >= wantAmount);
+
+    require(tx.outputs[payout].assets.length == 1);
+    require(tx.outputs[payout].assets.lookup(wantAssetTxid, wantAssetGroupIndex) == received);
+    require(tx.outputs[payout].value >= tx.input.current.value);
+
+    let recipient = tx.outputs[payout].script;
+    require(recipient.version == 1);
+    require(recipient.program == makerWP);
+  }
+
+  function cancel(signature userSig, signature serverSig) tapscript {
+    require(checkMultisig([user, server], [userSig, serverSig], 2));
+  }
+
+  function exit(signature userSig) tapscript {
+    require(older(serverExitDelay));
+    require(checkSig(userSig, user));
+  }
+}

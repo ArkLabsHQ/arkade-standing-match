@@ -1,0 +1,239 @@
+{
+  "formatVersion": 1,
+  "contractName": "MatchedSwap",
+  "constructorInputs": [
+    {
+      "name": "makerWP",
+      "type": "pubkey"
+    },
+    {
+      "name": "user",
+      "type": "pubkey"
+    },
+    {
+      "name": "offerAssetTxid",
+      "type": "bytes32"
+    },
+    {
+      "name": "offerAssetGroupIndex",
+      "type": "int"
+    },
+    {
+      "name": "offerAmount",
+      "type": "int"
+    },
+    {
+      "name": "wantAssetTxid",
+      "type": "bytes32"
+    },
+    {
+      "name": "wantAssetGroupIndex",
+      "type": "int"
+    },
+    {
+      "name": "wantAmount",
+      "type": "int"
+    }
+  ],
+  "functions": [
+    {
+      "name": "fulfill",
+      "arkade": {
+        "inputs": [],
+        "asm": [
+          "<wantAmount>",
+          "<wantAssetGroupIndex>",
+          "<wantAssetTxid>",
+          "<offerAmount>",
+          "<offerAssetGroupIndex>",
+          "<offerAssetTxid>",
+          "OP_INSPECTNUMINPUTS",
+          "2",
+          "OP_NUMEQUALVERIFY",
+          "OP_2",
+          "OP_PICK",
+          "0",
+          "OP_GREATERTHAN",
+          "OP_VERIFY",
+          "OP_5",
+          "OP_PICK",
+          "0",
+          "OP_GREATERTHAN",
+          "OP_VERIFY",
+          "OP_2DUP",
+          "OP_SWAP",
+          "OP_FINDASSETGROUPBYASSETID",
+          "OP_VERIFY",
+          "OP_DUP",
+          "OP_1",
+          "OP_INSPECTASSETGROUPSUM",
+          "OP_SWAP",
+          "OP_0",
+          "OP_INSPECTASSETGROUPSUM",
+          "OP_SUB",
+          "0",
+          "OP_NUMEQUALVERIFY",
+          "OP_3",
+          "OP_PICK",
+          "OP_5",
+          "OP_PICK",
+          "OP_FINDASSETGROUPBYASSETID",
+          "OP_VERIFY",
+          "OP_DUP",
+          "OP_1",
+          "OP_INSPECTASSETGROUPSUM",
+          "OP_SWAP",
+          "OP_0",
+          "OP_INSPECTASSETGROUPSUM",
+          "OP_SUB",
+          "0",
+          "OP_NUMEQUALVERIFY",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "1",
+          "OP_OVER",
+          "OP_SUB",
+          "OP_OVER",
+          "OP_INSPECTINASSETCOUNT",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "OP_OVER",
+          "OP_3",
+          "OP_ROLL",
+          "OP_4",
+          "OP_ROLL",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_3",
+          "OP_ROLL",
+          "OP_NUMEQUALVERIFY",
+          "OP_DUP",
+          "OP_INSPECTINASSETCOUNT",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "OP_2OVER",
+          "OP_SWAP",
+          "OP_INSPECTINASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_DUP",
+          "OP_5",
+          "OP_ROLL",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_OVER",
+          "OP_INSPECTOUTASSETCOUNT",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "OP_OVER",
+          "OP_3",
+          "OP_ROLL",
+          "OP_4",
+          "OP_ROLL",
+          "OP_INSPECTOUTASSETLOOKUP",
+          "OP_VERIFY",
+          "OP_SWAP",
+          "OP_NUMEQUALVERIFY",
+          "OP_DUP",
+          "OP_INSPECTOUTPUTVALUE",
+          "OP_PUSHCURRENTINPUTINDEX",
+          "OP_INSPECTINPUTVALUE",
+          "OP_GREATERTHANOREQUAL",
+          "OP_VERIFY",
+          "OP_INSPECTOUTPUTSCRIPTPUBKEY",
+          "1",
+          "OP_NUMEQUALVERIFY",
+          "<makerWP>",
+          "OP_EQUAL"
+        ]
+      },
+      "leaves": [
+        {
+          "name": "fulfill",
+          "witness": [
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            },
+            {
+              "name": "emulatorSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<SERVER_KEY>",
+            "OP_CHECKSIGVERIFY",
+            "<EMULATOR_KEY:fulfill>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "cancel",
+      "leaves": [
+        {
+          "name": "cancel",
+          "witness": [
+            {
+              "name": "userSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            },
+            {
+              "name": "serverSig",
+              "type": "signature",
+              "encoding": "schnorr-64",
+              "injected": true
+            }
+          ],
+          "asm": [
+            "<user>",
+            "OP_CHECKSIGVERIFY",
+            "<SERVER_KEY>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "exit",
+      "leaves": [
+        {
+          "name": "exit",
+          "witness": [
+            {
+              "name": "userSig",
+              "type": "signature",
+              "encoding": "schnorr-64"
+            }
+          ],
+          "asm": [
+            "<SERVER_EXIT_DELAY>",
+            "OP_CHECKSEQUENCEVERIFY",
+            "OP_DROP",
+            "<user>",
+            "OP_CHECKSIG"
+          ]
+        }
+      ]
+    }
+  ],
+  "source": {
+    "entry": "matched_swap.ark",
+    "files": {
+      "matched_swap.ark": "pragma arkade ^0.1.0;\n\ncontract MatchedSwap(\n  // 32-byte taproot program of the maker's script. fulfill pays it on this input's output.\n  pubkey  makerWP,\n  // 32-byte x-only key of the trader who funds the swap.\n  pubkey  user,\n  // The asset this trader deposits, genesis txid in internal byte order.\n  bytes32 offerAssetTxid,\n  // That asset's group index.\n  int     offerAssetGroupIndex,\n  // Units of the offer asset this input must hold. The whole input is the cross.\n  int     offerAmount,\n  // The asset this trader wants, genesis txid in internal byte order.\n  bytes32 wantAssetTxid,\n  // That asset's group index.\n  int     wantAssetGroupIndex,\n  // Minimum units of the want asset the counterparty input must hold.\n  int     wantAmount\n) {\n  function fulfill() {\n    require(tx.numInputs == 2);\n    require(offerAmount > 0);\n    require(wantAmount > 0);\n    require(tx.assetGroups.find(offerAssetTxid, offerAssetGroupIndex).delta == 0);\n    require(tx.assetGroups.find(wantAssetTxid, wantAssetGroupIndex).delta == 0);\n\n    int payout = this.activeInputIndex;\n    int counterparty = 1 - payout;\n\n    require(tx.inputs[payout].assets.length == 1);\n    require(tx.inputs[payout].assets.lookup(offerAssetTxid, offerAssetGroupIndex) == offerAmount);\n    require(tx.inputs[counterparty].assets.length == 1);\n\n    int received = tx.inputs[counterparty].assets.lookup(wantAssetTxid, wantAssetGroupIndex);\n    require(received >= wantAmount);\n\n    require(tx.outputs[payout].assets.length == 1);\n    require(tx.outputs[payout].assets.lookup(wantAssetTxid, wantAssetGroupIndex) == received);\n    require(tx.outputs[payout].value >= tx.input.current.value);\n\n    let recipient = tx.outputs[payout].script;\n    require(recipient.version == 1);\n    require(recipient.program == makerWP);\n  }\n\n  function cancel(signature userSig, signature serverSig) tapscript {\n    require(checkMultisig([user, server], [userSig, serverSig], 2));\n  }\n\n  function exit(signature userSig) tapscript {\n    require(older(serverExitDelay));\n    require(checkSig(userSig, user));\n  }\n}\n"
+    }
+  },
+  "compiler": {
+    "name": "arkadec",
+    "version": "0.1.0-rc.1",
+    "options": {
+      "optimize": true
+    }
+  },
+  "updatedAt": "2026-11-01T13:39:23.621479167+00:00",
+  "fingerprint": "sha256:edc50511f3b5f561564ec85e17d7f6601d230ddc22db01f85ae5bd19651465ac"
+}

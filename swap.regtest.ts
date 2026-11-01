@@ -20,7 +20,6 @@ import {
   configureEventSource,
   networks,
   submitViaEmulator,
-  type Identity,
   type VirtualCoin,
 } from "@arkade-os/sdk";
 
@@ -29,11 +28,8 @@ configureEventSource((url) => new EventSource(url));
 const OPERATOR = "http://localhost:7070";
 const ADMIN = "http://localhost:7071";
 const EMULATOR = "http://localhost:7073";
-const CARRIER = 330n;
 const ASSET_UNITS = 1000n;
 const OFFER_SATS = 2_000;
-const BTC_WANT = 20_000n;
-const BTC_DEPOSIT = 8_000;
 const FAUCET_SATS = 300_000;
 const DIRECT_SEND_SATS = 4_000;
 
@@ -41,11 +37,8 @@ const exec = promisify(execFile);
 const encode = (bytes: Uint8Array) => Buffer.from(bytes).toString("hex");
 const positions = new Map<string, Set<string>>();
 
-const wantAssetProgram = arkade.programFromArtifact(
-  JSON.parse(readFileSync(new URL("./contracts/swap_want_asset.artifact.json", import.meta.url), "utf8")),
-);
-const wantBtcProgram = arkade.programFromArtifact(
-  JSON.parse(readFileSync(new URL("./contracts/swap_want_btc.artifact.json", import.meta.url), "utf8")),
+const program = arkade.programFromArtifact(
+  JSON.parse(readFileSync(new URL("./contracts/matched_swap.artifact.json", import.meta.url), "utf8")),
 );
 
 await main();
@@ -58,11 +51,8 @@ async function main() {
 
   const walletA = await makeWallet();
   const walletB = await makeWallet();
-  const walletSolver = await makeWallet();
   const traderA = await connectTrader(walletA);
   const traderB = await connectTrader(walletB);
-  const solverSigns: { inputs: number; indexes: number[] }[] = [];
-  const solver = await connectTrader(walletSolver, solverSigns);
   const matcher = await Arkade.connect({
     service: { operatorUrl: OPERATOR, emulatorUrl: EMULATOR },
     storage: { contractRepository: new InMemoryContractRepository() },
@@ -78,10 +68,8 @@ async function main() {
     );
     await fundOffchain(traderA.address, FAUCET_SATS);
     await fundOffchain(traderB.address, FAUCET_SATS);
-    await fundOffchain(solver.address, FAUCET_SATS);
-    await waitFor("trader A sats", async () => (await walletA.getBalance()).available >= FAUCET_SATS);
-    await waitFor("trader B sats", async () => (await walletB.getBalance()).available >= FAUCET_SATS);
-    await waitFor("solver sats", async () => (await walletSolver.getBalance()).available >= FAUCET_SATS);
+    await waitFor("trader A sats", async () => (await walletA.getBalance()).available >= 100_000);
+    await waitFor("trader B sats", async () => (await walletB.getBalance()).available >= 100_000);
 
     const alpha = await walletA.assetManager.issue({ amount: ASSET_UNITS });
     const beta = await walletB.assetManager.issue({ amount: ASSET_UNITS });
@@ -89,113 +77,53 @@ async function main() {
     await waitFor("asset alpha", async () => held(await coinsAt(matcher, traderA.pkScript), alpha.assetId) >= ASSET_UNITS);
     await waitFor("asset beta", async () => held(await coinsAt(matcher, traderB.pkScript), beta.assetId) >= ASSET_UNITS);
 
-    const x = traderA.client.contract(wantAssetProgram, {
-      makerWP: traderA.program,
-      wantAmount: ASSET_UNITS,
-      wantAssetTxid: internalTxid(beta.assetId),
-      wantAssetGroupIndex: groupIndex(beta.assetId),
-      user: traderA.user,
-      payoutIndex: 0n,
-    });
-    const y = traderB.client.contract(wantAssetProgram, {
-      makerWP: traderB.program,
-      wantAmount: ASSET_UNITS,
-      wantAssetTxid: internalTxid(alpha.assetId),
-      wantAssetGroupIndex: groupIndex(alpha.assetId),
-      user: traderB.user,
-      payoutIndex: 1n,
-    });
+    const x = traderA.client.contract(program, swapArgs(traderA, alpha.assetId, beta.assetId));
+    const y = traderB.client.contract(program, swapArgs(traderB, beta.assetId, alpha.assetId));
     await x.register({ label: "X" });
     await y.register({ label: "Y" });
 
     const coinX = await fundContract(walletA, x, OFFER_SATS, [{ assetId: alpha.assetId, amount: ASSET_UNITS }]);
     const coinY = await fundContract(walletB, y, OFFER_SATS, [{ assetId: beta.assetId, amount: ASSET_UNITS }]);
-    assert.equal(assetAmount(coinX, alpha.assetId), ASSET_UNITS);
-    assert.equal(assetAmount(coinY, beta.assetId), ASSET_UNITS);
+    assert.equal(assetList(coinX).length, 1);
+    assert.equal(assetList(coinY).length, 1);
+    const alphaIn = assetAmount(coinX, alpha.assetId);
+    const betaIn = assetAmount(coinY, beta.assetId);
+    assert.equal(alphaIn, ASSET_UNITS);
+    assert.equal(betaIn, ASSET_UNITS);
     console.log("funded", outpoint(coinX), outpoint(coinY));
 
-    const matched = await matchOffers({
-      matcher,
-      inputs: [
-        { contract: x, coin: coinX },
-        { contract: y, coin: coinY },
-      ],
-      outputs: [
-        { script: traderA.pkScript, amount: CARRIER, assetId: beta.assetId, assetAmount: ASSET_UNITS, vin: 1 },
-        { script: traderB.pkScript, amount: CARRIER, assetId: alpha.assetId, assetAmount: ASSET_UNITS, vin: 0 },
-      ],
-    });
+    const matched = await matchOffers(matcher, [
+      { contract: x, coin: coinX },
+      { contract: y, coin: coinY },
+    ], [
+      { script: traderA.pkScript, amount: BigInt(sats(coinX)), assetId: beta.assetId, assetAmount: betaIn, vin: 1 },
+      { script: traderB.pkScript, amount: BigInt(sats(coinY)), assetId: alpha.assetId, assetAmount: alphaIn, vin: 0 },
+    ]);
     console.log("matched", matched.txid);
 
-    const spentX = await waitFor("X spent", async () => {
+    await waitFor("X spent", async () => {
       const coin = await coinByOutpoint(matcher, coinX);
       return coin && spent(coin) ? coin : undefined;
     });
-    const spentY = await waitFor("Y spent", async () => {
+    await waitFor("Y spent", async () => {
       const coin = await coinByOutpoint(matcher, coinY);
       return coin && spent(coin) ? coin : undefined;
     });
-    assert.ok(spent(spentX) && spent(spentY));
-    await waitFor("A holds beta", async () => held(await coinsAt(matcher, traderA.pkScript), beta.assetId) >= ASSET_UNITS);
-    await waitFor("B holds alpha", async () => held(await coinsAt(matcher, traderB.pkScript), alpha.assetId) >= ASSET_UNITS);
-    const aBeta = held(await coinsAt(matcher, traderA.pkScript), beta.assetId);
-    const bAlpha = held(await coinsAt(matcher, traderB.pkScript), alpha.assetId);
-    assert.ok(aBeta >= ASSET_UNITS, `A holds ${aBeta} beta`);
-    assert.ok(bAlpha >= ASSET_UNITS, `B holds ${bAlpha} alpha`);
-    console.log("indexer: deposits spent, traders hold the assets they wanted");
-
-    const btcOfferOnA = traderA.client.contract(wantBtcProgram, {
-      makerWP: traderA.program,
-      wantAmount: BTC_WANT,
-      user: traderA.user,
-      payoutIndex: 0n,
-    });
-    await btcOfferOnA.register({ label: "btc-offer" });
-    const btcDeposit = await fundContract(walletA, btcOfferOnA, BTC_DEPOSIT, []);
-    const btcOffer = solver.client.contract(wantBtcProgram, {
-      makerWP: traderA.program,
-      wantAmount: BTC_WANT,
-      user: traderA.user,
-      payoutIndex: 0n,
-    });
-    assert.equal(btcOffer.address, btcOfferOnA.address);
-    const solverCoin = await waitFor("solver coin", async () => {
-      const coins = (await coinsAt(matcher, solver.pkScript)).filter((coin) => !spent(coin) && assetList(coin).length === 0);
-      return coins.sort((left, right) => sats(right) - sats(left))[0];
-    });
-    assert.ok(sats(solverCoin) >= Number(BTC_WANT));
-    const filled = await btcOffer.functions
-      .fulfill()
-      .from(asUtxo(btcDeposit))
-      .fund([walletCoin(solver.vtxo, solverCoin)])
-      .to(traderA.pkScript, BTC_WANT)
-      .change(solver.pkScript)
-      .send();
-    const arkSigns = solverSigns.filter((call) => call.inputs > 1);
-    assert.deepEqual(arkSigns.map((call) => call.indexes), [[1]], `solver signed ${JSON.stringify(solverSigns)}`);
-    await waitFor("btc offer spent", async () => {
-      const coin = await coinByOutpoint(matcher, btcDeposit);
-      return coin && spent(coin) ? coin : undefined;
-    });
-    await waitFor("A received sats", async () => {
+    const paidA = await waitFor("A holds B's full input", async () => {
       const coins = await coinsAt(matcher, traderA.pkScript);
-      return coins.some((coin) => !spent(coin) && coin.txid === filled.txid && sats(coin) >= Number(BTC_WANT));
+      return coins.find((coin) => coin.txid === matched.txid && assetAmount(coin, beta.assetId) === betaIn && sats(coin) >= sats(coinX));
     });
-    console.log("solver filled payoutIndex 0 and signed only the extra input");
+    const paidB = await waitFor("B holds A's full input", async () => {
+      const coins = await coinsAt(matcher, traderB.pkScript);
+      return coins.find((coin) => coin.txid === matched.txid && assetAmount(coin, alpha.assetId) === alphaIn && sats(coin) >= sats(coinY));
+    });
+    assert.equal(assetAmount(paidA, beta.assetId), betaIn);
+    assert.equal(assetAmount(paidB, alpha.assetId), alphaIn);
+    console.log("indexer: both deposits spent, each trader holds the other's full input");
 
-    const cancelOffer = traderA.client.contract(wantAssetProgram, {
-      makerWP: traderA.program,
-      wantAmount: ASSET_UNITS,
-      wantAssetTxid: internalTxid(alpha.assetId),
-      wantAssetGroupIndex: groupIndex(alpha.assetId),
-      user: traderA.user,
-      payoutIndex: 0n,
-    });
+    const cancelOffer = traderA.client.contract(program, swapArgs(traderA, beta.assetId, alpha.assetId));
     await cancelOffer.register({ label: "cancel-X" });
-    const betaCoin = await waitFor("A's beta coin", async () =>
-      (await coinsAt(matcher, traderA.pkScript)).find((coin) => !spent(coin) && assetAmount(coin, beta.assetId) >= ASSET_UNITS),
-    );
-    const locked = assetAmount(betaCoin, beta.assetId);
+    const locked = ASSET_UNITS;
     const cancelCoin = await fundContract(walletA, cancelOffer, OFFER_SATS, [{ assetId: beta.assetId, amount: locked }]);
     assert.equal(assetAmount(cancelCoin, beta.assetId), locked);
     const cancelled = await cancelOffer.functions
@@ -214,8 +142,7 @@ async function main() {
       return coin && spent(coin) ? coin : undefined;
     });
     await waitFor("deposit back on A", async () => held(await coinsAt(matcher, traderA.pkScript), beta.assetId) >= locked);
-    const returned = held(await coinsAt(matcher, traderA.pkScript), beta.assetId);
-    assert.ok(returned >= locked, `deposit back: A holds ${returned}, locked ${locked}`);
+    assert.ok(held(await coinsAt(matcher, traderA.pkScript), beta.assetId) >= locked);
     console.log("cancel returned the deposit with no counterparty offer");
 
     const strayTxid = await walletA.send({
@@ -227,40 +154,48 @@ async function main() {
     });
     const unspent = (await coinsAt(matcher, cancelOffer.pkScript)).filter((coin) => !spent(coin));
     const open = unspent.filter((coin) => isPosition(cancelOffer.pkScript, coin));
-    assert.equal(open.length, 0, "a spent funding coin is still the open position");
-    assert.equal(isPosition(cancelOffer.pkScript, stray), false, "direct send counted as the contract position");
+    assert.equal(open.length, 0);
+    assert.equal(isPosition(cancelOffer.pkScript, stray), false);
     assert.ok(unspent.some((coin) => coin.txid === stray.txid));
     console.log("direct send is a second coin, not the position");
-    console.log("standing match passed");
+    console.log("matched swap passed");
   } finally {
     matcher.dispose();
     traderA.client.dispose();
     traderB.client.dispose();
-    solver.client.dispose();
     await walletA.dispose();
     await walletB.dispose();
-    await walletSolver.dispose();
   }
 }
 
-async function matchOffers(params: {
-  matcher: Arkade;
-  inputs: { contract: ReturnType<Arkade["contract"]>; coin: VirtualCoin }[];
-  outputs: { script: Uint8Array; amount: bigint; assetId: string; assetAmount: bigint; vin: number }[];
-}) {
-  const { matcher, inputs, outputs } = params;
+function swapArgs(
+  trader: { program: Uint8Array; user: Uint8Array },
+  offerAssetId: string,
+  wantAssetId: string,
+) {
+  return {
+    makerWP: trader.program,
+    user: trader.user,
+    offerAssetTxid: internalTxid(offerAssetId),
+    offerAssetGroupIndex: groupIndex(offerAssetId),
+    offerAmount: ASSET_UNITS,
+    wantAssetTxid: internalTxid(wantAssetId),
+    wantAssetGroupIndex: groupIndex(wantAssetId),
+    wantAmount: ASSET_UNITS,
+  };
+}
+
+async function matchOffers(
+  matcher: Arkade,
+  inputs: { contract: ReturnType<Arkade["contract"]>; coin: VirtualCoin }[],
+  outputs: { script: Uint8Array; amount: bigint; assetId: string; assetAmount: bigint; vin: number }[],
+) {
   assert.equal(inputs.length, 2);
   assert.equal(outputs.length, 2);
-  const leaves = inputs.map((input, vin) => {
+  const leaves = inputs.map((input) => {
     const fn = input.contract.vtxoScript.functionByName("fulfill");
     if (!fn?.arkadeScript) throw new Error("fulfill has no covenant");
-    return {
-      vin,
-      script: fn.arkadeScript,
-      tapLeafScript: fn.tapLeafScript,
-      tapTree: input.contract.tapTree,
-      coin: input.coin,
-    };
+    return { script: fn.arkadeScript, tapLeafScript: fn.tapLeafScript, tapTree: input.contract.tapTree, coin: input.coin };
   });
   const txInputs = leaves.map((leaf) => ({
     txid: leaf.coin.txid,
@@ -270,17 +205,6 @@ async function matchOffers(params: {
     tapTree: leaf.tapTree,
   }));
   const txOutputs = outputs.map((output) => ({ script: output.script, amount: output.amount }));
-  const inputSum = txInputs.reduce((sum, input) => sum + BigInt(input.value), 0n);
-  const pinnedSum = txOutputs.reduce((sum, output) => sum + output.amount, 0n);
-  let rest = inputSum - pinnedSum;
-  if (rest < 0n) throw new Error(`inputs ${inputSum} cannot cover outputs ${pinnedSum}`);
-  // A sub-dust anchor makes arkd rebuild the transaction with unequal amounts.
-  // The pot above the two carriers goes out as change, and the anchor stays 0.
-  if (rest > 0n && rest < CARRIER) {
-    txOutputs[0].amount += rest;
-    rest = 0n;
-  }
-  if (rest >= CARRIER) txOutputs.push({ script: outputs[0].script, amount: rest });
   const packet = asset.Packet.create(outputs.map((output, vout) => asset.AssetGroup.create(
     asset.AssetId.fromString(output.assetId),
     null,
@@ -290,11 +214,12 @@ async function matchOffers(params: {
   )));
   txOutputs.push(Extension.create([
     packet,
-    EmulatorPacket.create(leaves.map((leaf) => ({ vin: leaf.vin, script: leaf.script }))),
+    EmulatorPacket.create(leaves.map((leaf, vin) => ({ vin, script: leaf.script }))),
   ]).txOut());
   const offchain = buildOffchainTx(txInputs, txOutputs, matcher.checkpoint);
   if (!matcher.indexer || !matcher.emulator) throw new Error("matcher is missing the indexer or the emulator");
   await attachPrevArkTxs(offchain.arkTx, txInputs.map((input) => input.txid), matcher.indexer);
+  assert.equal(offchain.arkTx.inputsLength, 2);
   for (let vin = 0; vin < txInputs.length; vin++) {
     const signatures = offchain.arkTx.getInput(vin).tapScriptSig ?? [];
     assert.equal(signatures.length, 0, `trader signature present on input ${vin}`);
@@ -302,14 +227,13 @@ async function matchOffers(params: {
   return submitViaEmulator(matcher.emulator, offchain, undefined, { inputIndexes: [] });
 }
 
-async function connectTrader(wallet: Wallet, seen?: { inputs: number; indexes: number[] }[]) {
+async function connectTrader(wallet: Wallet) {
   const descriptor = await wallet.getNextSigningDescriptor();
   if (!descriptor) throw new Error("wallet did not offer a signing descriptor");
   const signer = await wallet.signerForDescriptor(descriptor);
-  const identity = seen ? recordingIdentity(signer, seen) : signer;
   const client = await Arkade.connect({
     service: { operatorUrl: OPERATOR, emulatorUrl: EMULATOR },
-    identity,
+    identity: signer,
     storage: { contractRepository: new InMemoryContractRepository() },
     network: networks.regtest,
   });
@@ -334,21 +258,6 @@ async function connectTrader(wallet: Wallet, seen?: { inputs: number; indexes: n
     pkScript: decoded.pkScript,
     vtxo,
   };
-}
-
-function recordingIdentity(inner: Identity, seen: { inputs: number; indexes: number[] }[]): Identity {
-  return new Proxy(inner, {
-    get(target, prop, receiver) {
-      if (prop === "sign") {
-        return async (tx: Parameters<Identity["sign"]>[0], indexes?: number[]) => {
-          seen.push({ inputs: tx.inputsLength, indexes: indexes === undefined ? [] : [...indexes] });
-          return target.sign(tx, indexes);
-        };
-      }
-      const value = Reflect.get(target, prop, receiver);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-  });
 }
 
 async function makeWallet() {
@@ -434,16 +343,6 @@ function asUtxo(coin: VirtualCoin) {
   return { txid: coin.txid, vout: coin.vout, value: sats(coin) };
 }
 
-function walletCoin(vtxo: DefaultVtxo.Script, coin: VirtualCoin) {
-  return {
-    txid: coin.txid,
-    vout: coin.vout,
-    value: sats(coin),
-    tapLeafScript: vtxo.forfeit(),
-    tapTree: vtxo.encode(),
-  };
-}
-
 function internalTxid(assetId: string) {
   return Uint8Array.from(asset.AssetId.fromString(assetId).txid).reverse();
 }
@@ -475,8 +374,6 @@ async function fundOffchain(address: string, amount: number) {
   } catch (error) {
     const text = commandText(error);
     if (!text.includes("not enough funds")) throw error;
-    // Spent batches still show in the balance, and redeeming a note pays the
-    // intent fee. Zero that fee for the redeem, then put it back.
     await postFees("0.0");
     try {
       const note = await exec("docker", ["exec", "arkd", "arkd", "note", "--amount", String(Math.max(amount * 4, 1_000_000))]);
