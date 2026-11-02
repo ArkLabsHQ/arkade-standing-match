@@ -9,6 +9,12 @@ export default defineConfig({
   build: {
     outDir: "../dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL("./web/index.html", import.meta.url)),
+        pictures: fileURLToPath(new URL("./web/pictures.html", import.meta.url)),
+      },
+    },
   },
   server: {
     fs: {

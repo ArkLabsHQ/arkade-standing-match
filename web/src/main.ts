@@ -86,6 +86,7 @@ app.append(
     el("p", { className: "kicker", text: "MutinyNet" }),
     el("h1", { text: "Standing match" }),
     el("p", { className: "lead", text: "Trader A funds MatchedSwap. Trader B funds another instance. Each funding is an ordinary send. A matcher spends the two coins as one transaction. Fulfill has no funder signature." }),
+    picturesLink(),
   ),
   section("session", "Session"),
   section("next", "Next"),
@@ -770,6 +771,13 @@ function fillSelect(select: HTMLSelectElement, assets: WalletAsset[]) {
 function assetLabel(id: string): string {
   const held = state.holdings?.find((asset) => asset.id === id);
   return held?.ticker || held?.name || shortId(id);
+}
+
+function picturesLink(): HTMLElement {
+  const anchor = document.createElement("a");
+  anchor.href = `${import.meta.env.BASE_URL}pictures.html`;
+  anchor.textContent = "The four pictures";
+  return el("p", { className: "note" }, anchor);
 }
 
 function section(id: string, title: string): HTMLElement {

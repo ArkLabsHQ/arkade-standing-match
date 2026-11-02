@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MatchedSwap pictures</title>
+    <meta
+      name="description"
+      content="The four pictures of MatchedSwap: the coin a trader sends, the direct send beside it, the rejected fulfill, and who signs."
+    />
+    <link rel="stylesheet" href="./src/style.css" />
+    <link rel="stylesheet" href="./src/pictures.css" />
+  </head>
+  <body>
+    <main id="story">
+      <header>
+        <p class="kicker">MatchedSwap</p>
+        <h1>The four pictures</h1>
+        <p class="lead">
+          Trader A funds one standing offer. Trader B funds another. A matcher spends the two coins together.
+          <code>fulfill</code> has no funder signature.
+        </p>
+        <p class="note"><a href="./index.html">Back to the MutinyNet page</a></p>
+      </header>
+
+      <section>
+        <h2>1. The coin the trader sends</h2>
+        <p>
+          Trader A funds the address. That output is the standing offer: carrier 330, and the pot is the sats above it.
+          The offer asset on that coin is <code>offerAmount</code>.
+        </p>
+        <div class="flow" aria-label="Trader A funds one standing offer">
+          <div class="node">Trader A<br />the coin they send</div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node spine">fund<br />1 in → 1 out</div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node">standing offer<br />carrier 330<br />pot above it<br /><code>offerAmount</code></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. The direct send</h2>
+        <p>
+          A direct send to the same address creates a second coin beside the funded offer.
+          Only the recorded funding coin is the position.
+        </p>
+        <div class="lanes">
+          <div class="flow" aria-label="A direct send creates a second coin">
+            <div class="node">sender</div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="node spine">direct send</div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="node">second coin<br />same address</div>
+          </div>
+          <div class="flow" aria-label="The recorded funding coin is the position">
+            <div class="node">the funded offer</div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="node spine">recorded funding coin</div>
+            <div class="arrow" aria-hidden="true"></div>
+            <div class="node">the position</div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <h2>3. The rejected transaction</h2>
+        <p>
+          Input 1 sets <code>payout</code> to <code>this.activeInputIndex</code>.
+          A transaction that pays both makers on output 0 fails
+          <code>outputs[payout].program == makerWP</code> for that input. It may not balance.
+        </p>
+        <div class="flow" aria-label="A fulfill the script rejects">
+          <div class="node">input 1<br /><code>payout</code> = <code>activeInputIndex</code></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node rejected">rejected<br /><code>outputs[payout].program</code> != <code>makerWP</code></div>
+          <div class="arrow" aria-hidden="true"></div>
+          <div class="node rejected">output 0<br />the output the script refuses</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Who signs</h2>
+        <p>
+          <code>fulfill</code> is the server plus the function-tweaked emulator. Anyone who can build that transaction can pass the <code>require</code>.
+          <code>cancel</code> is the maker's key and the operator.
+          <code>exit</code> is the maker after <code>older(serverExitDelay)</code>.
+          The maker spends <code>makerWP</code> by spending the script that output pays.
+        </p>
+        <div class="pair">
+          <div class="node" aria-label="Who signs">
+            who signs<br />
+            <code>cancel</code>: <code>user</code> and the operator<br />
+            <code>exit</code>: <code>user</code> after <code>older(serverExitDelay)</code><br />
+            maker spends <code>makerWP</code>
+          </div>
+          <div class="node spine" aria-label="Who can build">
+            who can build<br />
+            <code>fulfill</code>: server + function-tweaked emulator
+          </div>
+        </div>
+        <p class="caption">A <code>require</code> is not authorization. It checks the transaction. It does not identify who may move the coins.</p>
+        <p>
+          Enforced: <code>tx.numInputs == 2</code>, this input's offer asset is exactly <code>offerAmount</code>,
+          the counterparty input's want asset is <code>received &gt;= wantAmount</code>,
+          and output <code>payout</code> pays <code>makerWP</code> exactly <code>received</code> with at least this input's sats.
+          Both asset deltas are 0.
+        </p>
+        <p class="note">
+          Not claimed: operator liveness, that <code>cancel</code> chooses a destination, or that a wish can be filled in part.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
